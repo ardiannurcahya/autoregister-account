@@ -2,7 +2,7 @@ const { chromium } = require('playwright');
 const TempMail = require('./tempmail.js');
 const { solve: solveRecaptchaAudio } = require('recaptcha-solver');
 const { execSync } = require('child_process');
-const { createWorker } = require('tesseract.js');
+const OpenAI = require('openai');
 
 function findFfmpeg() {
   // Check common paths
@@ -44,6 +44,8 @@ const CONFIG = {
   // Captcha mode: 'manual' | 'audio' | '2captcha'
   captchaMode: 'audio',
   captchaApiKey: '',
+  // MiMo API for custom captcha OCR
+  mimoApiKey: process.env.MIMO_API_KEY || '',
 };
 
 async function sleep(ms) {
@@ -84,11 +86,21 @@ async function handleCookies(page) {
 }
 
 async function solveMiCaptcha(page, retries = 3) {
+  if (!CONFIG.mimoApiKey) {
+    console.log('  MIMO_API_KEY not set, falling back to manual...');
+    return false;
+  }
+
+  const client = new OpenAI({
+    apiKey: CONFIG.mimoApiKey,
+    baseURL: 'https://api.xiaomimimo.com/v1',
+  });
+
   const img = page.locator('.mi-captcha-field__image, img[src*="getCode"], img[src*="icodeType"]').first();
   const input = page.locator('.mi-captcha-field input, input[placeholder*="code" i], input[placeholder*="captcha" i], input[name*="icode"]').first();
 
   for (let i = 0; i < retries; i++) {
-    console.log(`  OCR attempt ${i + 1}/${retries}...`);
+    console.log(`  MiMo OCR attempt ${i + 1}/${retries}...`);
     await sleep(1000);
 
     try {
@@ -101,13 +113,34 @@ async function solveMiCaptcha(page, retries = 3) {
 
       const resp = await fetch(imgUrl, { headers: { Cookie: cookieHeader } });
       const buffer = Buffer.from(await resp.arrayBuffer());
+      const base64 = buffer.toString('base64');
+      const mimeType = resp.headers.get('content-type') || 'image/png';
 
-      const worker = await createWorker('eng', 1, { logger: () => {} });
-      const { data: { text } } = await worker.recognize(buffer);
-      await worker.terminate();
+      const completion = await client.chat.completions.create({
+        model: 'mimo-v2.5',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a captcha solver. Output ONLY the text/numbers seen in the image. No explanation, no punctuation. If you see characters, output them exactly as they appear.',
+          },
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'image_url',
+                image_url: { url: `data:${mimeType};base64,${base64}` },
+              },
+            ],
+          },
+        ],
+        max_completion_tokens: 50,
+        extra_body: { thinking: { type: 'disabled' } },
+      });
 
-      const code = text.replace(/[^a-zA-Z0-9]/g, '').trim();
-      console.log(`  OCR result: "${code}"`);
+      const code = (completion.choices[0]?.message?.content || '')
+        .replace(/[^a-zA-Z0-9]/g, '').trim();
+
+      console.log(`  MiMo result: "${code}"`);
 
       if (code.length >= 4 && code.length <= 8) {
         await input.fill('');
@@ -119,18 +152,19 @@ async function solveMiCaptcha(page, retries = 3) {
           await submit.click();
           await sleep(2000);
 
-          // Check if captcha is gone
           if (!(await img.isVisible({ timeout: 1000 }).catch(() => false))) {
             console.log('  Mi captcha solved!');
             return true;
           }
-          console.log('  Wrong answer, retrying...');
+          console.log('  Wrong, retrying...');
           const refresh = page.locator('.mi-captcha-field__image, img[title="Refresh"]').first();
           await refresh.click().catch(() => {});
         }
+      } else {
+        console.log('  Invalid code length, retrying...');
       }
     } catch (e) {
-      console.log(`  OCR error: ${e.message}`);
+      console.log(`  MiMo error: ${e.message}`);
     }
   }
   return false;
