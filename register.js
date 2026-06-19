@@ -54,13 +54,29 @@ async function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+function rand(min, max) {
+  return Math.floor(min + Math.random() * (max - min));
+}
+
 async function typeHuman(page, selector, text) {
   const el = page.locator(selector).first();
   await el.click();
+  await sleep(rand(200, 500));
   for (const char of text) {
     await el.press(char);
-    await sleep(100 + Math.random() * 200); // 100-300ms delay
+    await sleep(rand(60, 180));
   }
+}
+
+// Pre-built list of free HTTP proxies (auto-refreshed occasionally)
+const FREE_PROXIES = [
+  // Add proxies here or use loop.js PROXIES array
+];
+
+async function getRandomProxy() {
+  if (CONFIG.proxy) return CONFIG.proxy;
+  if (FREE_PROXIES.length === 0) return '';
+  return FREE_PROXIES[Math.floor(Math.random() * FREE_PROXIES.length)];
 }
 
 async function solveCaptchaWithPython(imgLocator, page, retries = 3) {
@@ -420,18 +436,19 @@ async function register() {
     const emailInput = page.locator('input[type="text"]').first()
       .or(page.locator('input[name*="email" i], input[name*="account" i], input[placeholder*="email" i], input[placeholder*="Email" i], input[placeholder*="account" i], input[type="email"]').first());
     await emailInput.click();
+    await sleep(rand(300, 800));
     await emailInput.fill(email);
-    await sleep(300 + Math.random() * 700);
+    await sleep(rand(400, 900));
 
     // Fill password
     const passwordInputs = page.locator('input[type="password"]');
     await passwordInputs.nth(0).fill(CONFIG.password);
-    await sleep(300);
+    await sleep(rand(200, 500));
 
     // Fill confirm password
     if (await passwordInputs.count() > 1) {
       await passwordInputs.nth(1).fill(CONFIG.password);
-      await sleep(300);
+      await sleep(rand(200, 500));
     }
 
     // Agree to terms checkbox
@@ -450,9 +467,10 @@ async function register() {
 
     // Step 5: Submit and handle captcha
     console.log('[6/11] Submitting form (captcha may appear)...');
+    await sleep(rand(1500, 4000));
     const submitBtn = page.locator('button[type="submit"], button:has-text("Register"), button:has-text("Next"), button:has-text("Create"), a:has-text("Register")').first();
     await submitBtn.click();
-    await sleep(3000);
+    await sleep(rand(2000, 4000));
 
     // Handle captcha
     if (CONFIG.captchaMode === 'audio') {
