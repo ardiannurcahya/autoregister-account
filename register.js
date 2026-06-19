@@ -29,6 +29,39 @@ async function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+async function handleCookies(page) {
+  await sleep(1500);
+
+  const buttonSelectors = [
+    'button:has-text("Accept all")',
+    'button:has-text("Accept All")',
+    'button:has-text("Accept all cookies")',
+    'button:has-text("Allow all")',
+    'button:has-text("Allow All")',
+    'button:has-text("I agree")',
+    'button:has-text("Agree")',
+    'button:has-text("OK")',
+    'button:has-text("Accept")',
+    'button:has-text("Got it")',
+    'a:has-text("Accept all")',
+    '[class*="cookie"] button:has-text("Accept")',
+    '[class*="cookie"] button:has-text("OK")',
+    '[aria-label*="cookies"] button',
+    '#onetrust-accept-btn-handler',
+    '.cookie-accept',
+  ];
+
+  for (const selector of buttonSelectors) {
+    const btn = page.locator(selector).first();
+    if (await btn.isVisible({ timeout: 300 }).catch(() => false)) {
+      await btn.click();
+      console.log('  Cookies accepted');
+      await sleep(500);
+      return;
+    }
+  }
+}
+
 async function handleTermsAgreement(page) {
   await sleep(2000);
 
@@ -173,6 +206,7 @@ async function register() {
     // Step 2: Navigate to registration page
     console.log('[3/11] Navigating to registration page...');
     await page.goto(CONFIG.registerUrl, { waitUntil: 'networkidle', timeout: 30000 });
+    await handleCookies(page);
     await sleep(2000);
 
     // Step 3: Select region (skipped - auto-detected from _uRegion param)
@@ -277,6 +311,7 @@ async function register() {
     // Step 9: Navigate to platform console
     console.log('[9/11] Navigating to platform console...');
     await page.goto(CONFIG.consoleUrl, { waitUntil: 'networkidle', timeout: CONFIG.navigateTimeout });
+    await handleCookies(page);
     await sleep(3000);
 
     // Check again for terms (might appear after redirect)
@@ -321,7 +356,8 @@ async function register() {
         const url = CONFIG.consoleUrl + p;
         try {
           await page.goto(url, { waitUntil: 'networkidle', timeout: 8000 });
-          await sleep(2000);
+          await handleCookies(page);
+          await sleep(1500);
           foundApiPage = true;
           console.log(`  Navigated to: ${url}`);
           break;
