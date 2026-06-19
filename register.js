@@ -122,29 +122,30 @@ async function solveMiCaptcha(page, retries = 3) {
         model: 'mimo-v2.5',
         messages: [
           {
+            role: 'system',
+            content: 'Reply ONLY with the text visible in the image. No explanation. Output format: just the characters.',
+          },
+          {
             role: 'user',
             content: [
               {
-                type: 'text',
-                text: 'Read the text in this captcha image. Return ONLY the characters you see, nothing else.',
-              },
-              {
                 type: 'image_url',
-                image_url: { url: `data:${mimeType};base64,${base64}` },
+                image_url: { url: `data:${mimeType};base64,${base64}`, detail: 'high' },
               },
             ],
           },
         ],
-        max_completion_tokens: 50,
-        temperature: 0,
-        extra_body: { thinking: { type: 'disabled' } },
+        max_completion_tokens: 200,
       });
 
-      const raw = JSON.stringify(completion.choices[0]?.message);
-      console.log(`  Raw response: ${raw.slice(0, 200)}`);
+      const raw = completion.choices[0]?.message;
+      const fullText = (raw?.content || '') + ' ' + (raw?.reasoning_content || '');
+      console.log(`  Raw: ${fullText.trim().slice(0, 200)}...`);
 
-      const code = (completion.choices[0]?.message?.content || '')
-        .replace(/[^a-zA-Z0-9]/g, '').trim();
+      // Extract alphanumeric code (4-8 chars) from response
+      const matches = [...fullText.matchAll(/\b([A-Za-z0-9]{4,8})\b/g)];
+      const codes = matches.map(m => m[1]).filter(c => !/^\d{4}$/.test(c) || parseInt(c) > 2025);
+      const code = codes[0] || fullText.replace(/[^a-zA-Z0-9]/g, '').slice(0, 8);
 
       console.log(`  MiMo result: "${code}"`);
 
