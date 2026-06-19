@@ -29,6 +29,43 @@ async function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+async function waitForCaptchaSolved(page, maxWaitMs = 120000) {
+  const pollMs = 2000;
+  const deadline = Date.now() + maxWaitMs;
+
+  while (Date.now() < deadline) {
+    // Check 1: reCAPTCHA iframe gone
+    const recaptchaFrame = page.locator('iframe[src*="recaptcha"], iframe[src*="google.com/recaptcha"]');
+    const recaptchaGone = !(await recaptchaFrame.isVisible({ timeout: 500 }).catch(() => false));
+
+    // Check 2: hCaptcha iframe gone
+    const hcaptchaFrame = page.locator('iframe[src*="hcaptcha"]');
+    const hcaptchaGone = !(await hcaptchaFrame.isVisible({ timeout: 500 }).catch(() => false));
+
+    // Check 3: OTP/code input appeared (means captcha passed)
+    const otpField = page.locator('input[maxlength="6"], input[maxlength="4"], input[placeholder*="code" i], input[placeholder*="OTP" i]');
+    const otpAppeared = await otpField.isVisible({ timeout: 500 }).catch(() => false);
+
+    // Check 4: "checking" or "solved" indicator in DOM
+    const solvedIndicator = page.locator('[class*="recaptcha-checked"], .g-recaptcha[data-callback], #g-recaptcha-response[value]:not([value=""])');
+    const indicatorFound = await solvedIndicator.isVisible({ timeout: 500 }).catch(() => false);
+
+    if (recaptchaGone && hcaptchaGone && (otpAppeared || indicatorFound)) {
+      await sleep(500);
+      return true;
+    }
+
+    // Partial match: captcha gone (but OTP not yet appeared) — likely solved
+    if (recaptchaGone && hcaptchaGone) {
+      await sleep(1000);
+      return true;
+    }
+
+    await sleep(pollMs);
+  }
+  return false;
+}
+
 async function register() {
   console.log('[1/10] Launching browser...');
   const browser = await chromium.launch({
@@ -98,8 +135,15 @@ async function register() {
     // Handle captcha
     if (CONFIG.captchaMode === 'manual') {
       console.log('  >>> CAPTCHA: Please solve the captcha manually in the browser.');
-      console.log('  >>> Waiting up to 60 seconds...');
-      await sleep(60000); // Wait for manual solving
+      console.log('  >>> Auto-detecting when solved...');
+
+      // Poll until captcha is solved (max 120s)
+      const captchaSolved = await waitForCaptchaSolved(page, 120000);
+      if (captchaSolved) {
+        console.log('  Captcha solved! Continuing...');
+      } else {
+        console.log('  [WARN] Captcha detection timeout, proceeding anyway...');
+      }
     } else {
       // 2captcha logic (placeholder)
       console.log('  Captcha auto-solve not implemented');
