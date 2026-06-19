@@ -115,28 +115,30 @@ async function solveMiCaptcha(page, retries = 3) {
       if (!resp.ok) { console.log(`  Image fetch failed: ${resp.status}`); continue; }
       const buffer = Buffer.from(await resp.arrayBuffer());
       const base64 = buffer.toString('base64');
-      const mimeType = resp.headers.get('content-type') || 'image/png';
+      const mimeType = (resp.headers.get('content-type') || '').includes('image')
+        ? resp.headers.get('content-type')
+        : (buffer[0] === 0xFF && buffer[1] === 0xD8 ? 'image/jpeg' : 'image/png');
       console.log(`  Image: ${buffer.length} bytes, type: ${mimeType}`);
 
       const completion = await client.chat.completions.create({
         model: 'mimo-v2.5',
         messages: [
           {
+            role: 'system',
+            content: 'You are a captcha reader. Output ONLY the alphanumeric code shown in the image. No other text.',
+          },
+          {
             role: 'user',
             content: [
               {
                 type: 'image_url',
-                image_url: { url: `data:${mimeType};base64,${base64}`, detail: 'high' },
-              },
-              {
-                type: 'text',
-                text: 'Output ONLY the alphanumeric code from this captcha image. Do NOT include any other words.',
+                image_url: { url: `data:${mimeType};base64,${base64}` },
               },
             ],
           },
         ],
-        max_completion_tokens: 50,
-        stop: [' ', '\n', '.', ',', ':', '-'],
+        max_completion_tokens: 200,
+        extra_body: { thinking: { type: 'disabled' } },
       });
 
       const raw = completion.choices[0]?.message;
