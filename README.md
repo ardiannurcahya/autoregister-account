@@ -4,11 +4,11 @@ Multi-platform automated account registration bot using Playwright + temporary e
 
 ## Supported Platforms
 
-| Platform                                        | Script                | Command              |
-| ----------------------------------------------- | --------------------- | -------------------- |
-| [Xiaomi MiMo API](https://platform.xiaomimimo.com) | `register.js`       | `npm run register` |
+| Platform                                        | Script                  | Command              |
+| ----------------------------------------------- | ----------------------- | -------------------- |
+| [Xiaomi MiMo API](https://platform.xiaomimimo.com) | `register.js`         | `npm run register` |
 | [Alibaba Cloud](https://account.alibabacloud.com)  | `register_alibaba.js` | `npm run alibaba`  |
-| [Qoder](https://qoder.com) (via llm-agent-trade)   | `register_qoder.js` | `npm run qoder`    |
+| [Qoder](https://qoder.com) (voauth 9router)        | `register_qoder.js`   | `npm run qoder`    |
 
 ## Features
 
@@ -143,23 +143,24 @@ npm run loop
 | 8    | Terms & agreements (checklist + confirm)               |
 | 9    | Redirect to console + accept cookies                   |
 | 10   | Navigate to API Keys → Create API Key                 |
-| 11   | Extract API key → save to `keys.csv`                |
+| 11   | Extract API key → save to`keys.csv`                 |
 
 ### Alibaba Cloud (9 steps)
 
-| Step | Description                                                        |
-| ---- | ------------------------------------------------------------------ |
-| 1/9  | Launch Chromium (stealth + anti-fingerprint: WebGL, Canvas, Audio) |
-| 2/9  | Generate temporary email via Supabase                              |
-| 3/9  | Navigate to account.alibabacloud.com                               |
-| 4/9  | Select "Individual Account" (inside iframe)                        |
-| 5/9  | Click "Next"                                                       |
-| 6/9  | Fill email, password, confirm password (char-by-char typing)       |
-| 7/9  | Click "Sign Up" → solve Baxia slider captcha (auto/manual)        |
-| 8/9  | Select email tab → click "Send" → wait OTP → fill `#emailCaptcha` |
-| 9/9  | Check "I agree" → Sign Up → open Model Studio in new tab → create API key → save to `alibaba.csv` |
+| Step | Description                                                                                            |
+| ---- | ------------------------------------------------------------------------------------------------------ |
+| 1/9  | Launch Chromium (stealth + anti-fingerprint: WebGL, Canvas, Audio)                                     |
+| 2/9  | Generate temporary email via Supabase                                                                  |
+| 3/9  | Navigate to account.alibabacloud.com                                                                   |
+| 4/9  | Select "Individual Account" (inside iframe)                                                            |
+| 5/9  | Click "Next"                                                                                           |
+| 6/9  | Fill email, password, confirm password (char-by-char typing)                                           |
+| 7/9  | Click "Sign Up" → solve Baxia slider captcha (auto/manual)                                            |
+| 8/9  | Select email tab → click "Send" → wait OTP → fill`#emailCaptcha`                                  |
+| 9/9  | Check "I agree" → Sign Up → open Model Studio in new tab → create API key → save to`alibaba.csv` |
 
 **Notes:**
+
 - Registration form is inside `#alibaba-register-box` iframe
 - After Sign Up Step 1, Baxia slider captcha appears (auto-slided)
 - After OTP, captcha may appear again (waits for manual solve)
@@ -207,19 +208,19 @@ timestamp,platform,first_name,last_name,email,password,status
 
 ## File Structure
 
-| File                         | Description                            |
-| ---------------------------- | -------------------------------------- |
-| `register.js`              | Xiaomi MiMo bot (Playwright)           |
-| `register_alibaba.js`      | Alibaba Cloud bot (Playwright + iframe)|
-| `register_qoder.js`        | Qoder bot (Playwright + multi-tab)     |
-| `loop.js`                  | Xiaomi loop runner with proxy rotation |
-| `tempmail.js`              | Temp email + OTP extractor (Node)      |
-| `tempmail.py`              | Temp email + OTP extractor (Python)    |
-| `captcha_puzzle_solver.py` | OpenCV puzzle captcha solver (Aliyun)  |
+| File                         | Description                              |
+| ---------------------------- | ---------------------------------------- |
+| `register.js`              | Xiaomi MiMo bot (Playwright)             |
+| `register_alibaba.js`      | Alibaba Cloud bot (Playwright + iframe)  |
+| `register_qoder.js`        | Qoder bot (Playwright + multi-tab)       |
+| `loop.js`                  | Xiaomi loop runner with proxy rotation   |
+| `tempmail.js`              | Temp email + OTP extractor (Node)        |
+| `tempmail.py`              | Temp email + OTP extractor (Python)      |
+| `captcha_puzzle_solver.py` | OpenCV puzzle captcha solver (Aliyun)    |
 | `utils/capmonster.js`      | CapMonster solver (Aliyun + ImageToText) |
-| `.env`                     | Credentials (gitignored)               |
-| `keys.csv`                 | Xiaomi + Qoder output (gitignored)     |
-| `alibaba.csv`              | Alibaba output (gitignored)            |
+| `.env`                     | Credentials (gitignored)                 |
+| `keys.csv`                 | Xiaomi + Qoder output (gitignored)       |
+| `alibaba.csv`              | Alibaba output (gitignored)              |
 
 ## Notes
 

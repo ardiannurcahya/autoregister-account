@@ -13,7 +13,7 @@ const path = require('path');
 const { findFfmpeg } = require('./utils/ffmpeg.js');
 const { sleep, rand, typeHuman, handleCookies } = require('./utils/helpers.js');
 const { solveRecaptchaWith2captcha, waitForCaptchaSolved } = require('./utils/captcha.js');
-const { solveImageCaptcha } = require('./utils/capmonster.js');
+const SolveCaptcha = require('solvecaptcha-javascript');
 
 const ffmpegPath = findFfmpeg();
 console.log(`  ffmpeg: ${ffmpegPath}`);
@@ -34,13 +34,13 @@ const CONFIG = {
   region: 'Indonesia',
   // Timeouts (ms)
   emailTimeout: 120000,
-  otpTimeout: 180000,
+  otpTimeout: 30000,
   navigateTimeout: 30000,
   // Captcha mode: 'manual' | 'audio' | '2captcha'
   captchaMode: 'audio',
   captchaApiKey: '',
-  // CapMonster API key for Xiaomi custom text/image captcha (2nd captcha)
-  capmonsterApiKey: process.env.CAPMONSTER_API_KEY || '',
+  // SolveCaptcha API key for Xiaomi custom text/image captcha (2nd captcha)
+  solvecaptchaApiKey: process.env.SOLVECAPTCHA_API_KEY || process.env.CAPMONSTER_API_KEY || '',
   // Proxy (optional): 'http://user:pass@host:port' or empty to disable
   proxy: process.env.PROXY || '',
 };
@@ -139,12 +139,195 @@ async function handleTermsAgreement(page) {
   console.log('  [WARN] Confirm button not found, proceeding anyway...');
 }
 
+async function solveImageCaptchaWithSolveCaptcha(imgLocator, page, options) {
+  const {
+    apiKey,
+    retries = 3,
+    inputSelector = '.mi-captcha-field input, input[name*="icode"]',
+    submitSelector = 'button[type="submit"], button:has-text("Verify"), button:has-text("Confirm")',
+  } = options;
+
+  if (!apiKey) {
+    console.log('  [WARN] No SolveCaptcha API key provided.');
+    return false;
+  }
+
+  const solver = new SolveCaptcha.Solver(apiKey);
+
+  for (let i = 0; i < retries; i++) {
+    console.log(`  SolveCaptcha ImageToText attempt ${i + 1}/${retries}...`);
+    await sleep(1000);
+
+    const captchasDir = path.join(__dirname, 'captchas');
+    if (!fs.existsSync(captchasDir)) {
+      fs.mkdirSync(captchasDir, { recursive: true });
+    }
+    const captchaLastPath = path.join(__dirname, 'captcha_last.png');
+    const timestampedPath = path.join(captchasDir, `captcha_${Date.now()}.png`);
+    try {
+      // Extract the image data from the <img> element via canvas (without grayscale/thresholding).
+      let bodyBase64 = await imgLocator.evaluate((img) => {
+        return new Promise((resolve, reject) => {
+          try {
+            if (!img.complete || img.naturalWidth === 0) {
+              img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.naturalWidth || img.width;
+                canvas.height = img.naturalHeight || img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                resolve(canvas.toDataURL('image/png').split(',')[1] || '');
+              };
+              img.onerror = () => reject(new Error('Image load error'));
+            } else {
+              const canvas = document.createElement('canvas');
+              canvas.width = img.naturalWidth || img.width;
+              canvas.height = img.naturalHeight || img.height;
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0);
+              resolve(canvas.toDataURL('image/png').split(',')[1] || '');
+            }
+          } catch (e) {
+            reject(e);
+          }
+        });
+      }).catch(() => null);
+
+      if (bodyBase64) {
+        fs.writeFileSync(timestampedPath, Buffer.from(bodyBase64, 'base64'));
+        fs.writeFileSync(captchaLastPath, Buffer.from(bodyBase64, 'base64'));
+      } else {
+        console.log('  Canvas extraction failed, falling back to screenshot...');
+        await imgLocator.screenshot({ path: timestampedPath });
+        fs.copyFileSync(timestampedPath, captchaLastPath);
+        const imgBuffer = fs.readFileSync(timestampedPath);
+        bodyBase64 = imgBuffer.toString('base64');
+      }
+      console.log(`  Saved captcha image to: ${timestampedPath} and ${captchaLastPath}`);
+
+      console.log(`  Image size: ${Math.round(bodyBase64.length * 3 / 4)} bytes`);
+
+      // Submit to SolveCaptcha
+      const res = await solver.imageCaptcha({
+        body: bodyBase64,
+        numeric: 4,
+        min_len: 4,
+        max_len: 6
+      });
+
+      const code = (res && res.data || '').trim().replace(/[^a-zA-Z0-9]/g, '');
+      console.log(`  SolveCaptcha result: "${code}"`);
+
+      if (code.length < 3 || code.length > 8) {
+        console.log('  Invalid code length, retrying...');
+        continue;
+      }
+
+      // Fill the answer into the input
+      const input = page.locator(inputSelector).first();
+      const inputFound = await input.isVisible({ timeout: 1000 }).catch(() => false);
+      if (!inputFound) {
+        console.log('  [WARN] Captcha input not found, retrying...');
+        continue;
+      }
+      await input.focus();
+      await input.fill('');
+      await input.pressSequentially(code, { delay: 100 });
+      await input.dispatchEvent('input', { bubbles: true });
+      await input.dispatchEvent('change', { bubbles: true });
+      await sleep(500);
+      console.log(`  Filled captcha input with: "${code}"`);
+
+      // Some Xiaomi captchas auto-verify on input — check if image refreshed
+      await sleep(500);
+      if (!(await imgLocator.isVisible({ timeout: 500 }).catch(() => false))) {
+        console.log('  Captcha auto-verified!');
+        return true;
+      }
+
+      // Click submit — try multiple selectors, prioritizing specific captcha containers
+      const allSubmitSelectors = [
+        // 1. Specific dialog buttons with matching text (highest priority)
+        '.mi-dialog button:has-text("Submit")',
+        '.mi-modal button:has-text("Submit")',
+        '.mi-dialog button:has-text("Confirm")',
+        '.mi-modal button:has-text("Confirm")',
+
+        // 2. Any button with matching text
+        'button:has-text("Submit")',
+        'button:has-text("Confirm")',
+        'button:has-text("OK")',
+        'button:has-text("Verify")',
+
+        // 3. Selectors containing "Submit" (in case it is a div/span/a)
+        'div:has-text("Submit")',
+        'span:has-text("Submit")',
+        'a:has-text("Submit")',
+        '[role="button"]:has-text("Submit")',
+
+        // 4. Default submit inputs/buttons
+        'button[type="Submit"]',
+        'input[type="Submit"]',
+
+        // 5. Generic modal/dialog buttons (as fallback)
+        '.mi-dialog button',
+        '.mi-modal button',
+        'button:has-text("Next")',
+        'button:has-text("Continue")',
+        'button:has-text("Register")',
+
+        // 6. Very low priority / risky selectors (put at the end)
+        '.mi-captcha-field button:has-text("Submit")',
+        '.mi-captcha-field button:has-text("Confirm")',
+        '.mi-captcha-field button',
+        '.mi-captcha-field a',
+      ];
+      let submitClicked = false;
+      for (const sel of allSubmitSelectors) {
+        const btn = page.locator(sel).first();
+        if (await btn.isVisible({ timeout: 300 }).catch(() => false)) {
+          if (await btn.isEnabled().catch(() => false)) {
+            await btn.click();
+            submitClicked = true;
+            console.log(`  Clicked submit via: ${sel}`);
+            break;
+          } else {
+            console.log(`  Submit button ${sel} is visible but disabled, skipping...`);
+          }
+        }
+      }
+
+      // Fallback: press Enter on the input
+      if (!submitClicked) {
+        console.log('  No enabled submit button found, pressing Enter on input...');
+        await input.press('Enter');
+        submitClicked = true;
+      }
+
+      if (submitClicked) {
+        await sleep(2000);
+
+        // If the captcha image is gone, we succeeded
+        if (!(await imgLocator.isVisible({ timeout: 1000 }).catch(() => false))) {
+          return true;
+        }
+        console.log('  Wrong answer, retrying...');
+      }
+    } catch (e) {
+      console.log(`  SolveCaptcha error: ${e.message}`);
+    } finally {
+      // Keep captcha_last.png for user inspection
+    }
+  }
+  return false;
+}
+
 // solveRecaptchaWith2captcha and waitForCaptchaSolved functions are now imported from ./utils/captcha.js
 
 async function register() {
   console.log('[1/11] Launching browser...');
   const launchOpts = {
-    headless: false,
+    headless: true,
     args: [
       '--disable-blink-features=AutomationControlled',
       '--no-sandbox',
@@ -183,11 +366,8 @@ async function register() {
     const email = inbox.address;
     console.log(`  Email: ${email}`);
 
-    // Step 2: Navigate to landing page → click Sign Up → redirect to registration
-    console.log('[3/11] Opening landing page...');
-    await page.goto(CONFIG.landingUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await handleCookies(page);
-    await sleep(rand(2000, 3000));
+    // Step 2: Navigate directly to registration page
+    console.log('[3/11] Opening registration page directly...');
     await page.goto(CONFIG.registerUrl, { waitUntil: 'domcontentloaded', timeout: 30000 });
 
     // Wait for Xiaomi registration page to load
@@ -229,9 +409,6 @@ async function register() {
       console.log('  Terms checkbox: checked');
     }
 
-    // Take screenshot for debugging
-    // await page.screenshot({ path: 'before_submit.png' });
-    console.log('  Screenshot saved: before_submit.png');
 
     // Step 5: Submit and handle captcha
     console.log('[6/11] Submitting form (captcha may appear)...');
@@ -246,6 +423,7 @@ async function register() {
 
       // Wait for reCAPTCHA checkbox to load (with retry)
       console.log('  Waiting for reCAPTCHA to load...');
+      await sleep(rand(1000, 2000)); // wait like a human loading/reading the page first
       let checkboxClicked = false;
       for (let attempt = 0; attempt < 5 && !checkboxClicked; attempt++) {
         try {
@@ -259,9 +437,10 @@ async function register() {
               await frame.waitForSelector('.recaptcha-checkbox-border', { state: 'visible', timeout: 5000 });
               const checkbox = await frame.$('.recaptcha-checkbox-border');
               if (checkbox) {
+                await sleep(rand(1000, 000)); // human delay before clicking the checkbox
                 await checkbox.click();
                 console.log('  Checkbox clicked, waiting for challenge...');
-                await sleep(rand(2000, 3000));
+                await sleep(rand(1000, 2000)); // human wait after clicking the checkbox
                 checkboxClicked = true;
               }
             }
@@ -279,7 +458,14 @@ async function register() {
 
       try {
         process.env.VERBOSE = '1';
-        await solveRecaptchaAudio(page, { wait: 15000, retry: 5, ffmpeg: ffmpegPath });
+        console.log('  Waiting a moment before audio solving challenge...');
+        await sleep(rand(1000, 2000)); // wait before clicking audio button
+        await solveRecaptchaAudio(page, { 
+          wait: 15000, 
+          retry: 5, 
+          ffmpeg: ffmpegPath,
+          delay: rand(50, 200) // human-like typing speed for captcha response characters
+        });
         console.log('  reCAPTCHA solved via audio!');
 
         // Check for Xiaomi custom 2nd captcha (text/image)
@@ -304,16 +490,25 @@ async function register() {
 
         if (captchaVisible) {
           const customImg = page.locator('.mi-captcha-field__image, img[src*="getCode"], img[src*="icodeType"]').first();
-          console.log('  >>> XIAOMI CUSTOM CAPTCHA DETECTED — solving with CapMonster ImageToText...');
-          // await page.screenshot({ path: 'custom_captcha.png' });
+          console.log('  >>> XIAOMI CUSTOM CAPTCHA DETECTED — solving with SolveCaptcha ImageToText...');
 
-          const solved = await solveImageCaptcha(customImg, page, {
-            apiKey: CONFIG.capmonsterApiKey,
+          const solved = await solveImageCaptchaWithSolveCaptcha(customImg, page, {
+            apiKey: CONFIG.solvecaptchaApiKey,
           });
           if (solved) {
             console.log('  Custom captcha solved!');
+            // Wait a moment and check if the main registration form's submit button is still visible.
+            // If it is, click it again to submit the form with the solved captcha token.
+            await sleep(2000);
+            if (await submitBtn.isVisible().catch(() => false)) {
+              if (await submitBtn.isEnabled().catch(() => false)) {
+                console.log('  Form not submitted automatically. Clicking main Next/Submit button again...');
+                await submitBtn.click();
+                await sleep(2000);
+              }
+            }
           } else {
-            console.log('  >>> CapMonster failed — solve manually within 20s or browser closes');
+            console.log('  >>> SolveCaptcha failed — solve manually within 20s or browser closes');
             const manualSolved = await waitForCaptchaSolved(page, 40000);
             if (!manualSolved) {
               console.log('  Timeout, closing browser');
@@ -350,12 +545,15 @@ async function register() {
     const otp = await tempmail.waitForOtp(email, CONFIG.otpTimeout, 3000);
 
     if (!otp) {
-      console.log('  TIMEOUT: No OTP received. Check browser manually.');
-      console.log('  Browser stays open for manual intervention.');
-      // await page.screenshot({ path: 'timeout.png' });
-      // Don't close browser so user can intervene
-      await new Promise(() => {}); // Keep alive
-      return;
+      console.log('  TIMEOUT: No OTP received.');
+      console.log('  Closing browser automatically...');
+      
+      // Tutup browser secara otomatis
+      if (browser) {
+        await browser.close();
+      }
+      
+      return; // Keluar dari fungsi
     }
 
     console.log(`  OTP received: ${otp}`);
@@ -395,7 +593,6 @@ async function register() {
     await handleCookies(page);
     await sleep(2000);
 
-    // await page.screenshot({ path: 'registered.png' });
     console.log('  Landed on platform console');
 
     // Step 10: Create API Key
@@ -443,7 +640,6 @@ async function register() {
       }
     }
 
-    // await page.screenshot({ path: 'api_keys_page.png' });
     await sleep(1000);
 
     // Click "Create" or "New" button
@@ -474,7 +670,6 @@ async function register() {
       console.log('  Create API Key dialog opened');
     } else {
       console.log('  [WARN] Create button not found');
-      // await page.screenshot({ path: 'no_create_btn.png' });
     }
 
     // Fill API key name in modal/input
@@ -529,7 +724,6 @@ async function register() {
       await sleep(2000);
       console.log('  API Key creation confirmed');
     }
-    // await page.screenshot({ path: 'api_key_created.png' });
 
     // Step 10: Extract and save the API key
     console.log('[11/11] Extracting API Key...');
@@ -597,7 +791,7 @@ async function register() {
     console.log('========================================');
     console.log(`  Email:      ${email}`);
     console.log(`  Password:   ${CONFIG.password}`);
-    console.log(`  API Key:    ${apiKey || 'check api_key_created.png'}`);
+    console.log(`  API Key:    ${apiKey || 'NOT_FOUND'}`);
     console.log(`  Saved to:   ${CONFIG.outputFile}`);
     console.log('========================================\n');
     console.log('Browser will close in 30 seconds...');
@@ -605,8 +799,7 @@ async function register() {
 
   } catch (err) {
     console.error('ERROR:', err.message);
-    // await page.screenshot({ path: 'error.png' });
-    console.log('Error screenshot saved: error.png');
+
     await sleep(10000);
   } finally {
     await browser.close();

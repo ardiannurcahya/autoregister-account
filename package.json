@@ -29,6 +29,7 @@
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "recaptcha-solver": "^0.3.0",
+    "solvecaptcha-javascript": "^1.0.1",
     "tesseract.js": "^5.1.1"
   }
 }
