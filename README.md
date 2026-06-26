@@ -51,6 +51,7 @@ QODER_ACCOUNT_PASSWORD=your_account_password
 ALIBABA_PASSWORD=your_alibaba_password
 CAPMONSTER_API_KEY=your_capmonster_key
 PROXY=http://user:pass@host:port
+SOLVECAPTCHA_API_KEY=your_solvecaptcha_key
 ```
 
 ### Xiaomi MiMo
